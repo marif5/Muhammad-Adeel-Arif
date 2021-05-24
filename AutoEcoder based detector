@@ -1,0 +1,239 @@
+clear all
+clc
+close all
+    
+% CASE 1-2-3 : IEEE 1547 system (1.3.11,1.3.11.1,1.3.11.2)
+        
+tFinal = 10;
+
+Pw = 2e6;
+Pl = 1.8e6;
+Ql = 300e3;
+Qc = 200e3;
+
+Pl2 = 0;
+Ql2 = 0;
+Qc2 = 0;
+
+t_isl = 2;              %Instant of islanding
+
+to = t_isl - 1;         %start of training series
+tk1 = t_isl - 0.01;     %end of training series 
+tk2 = t_isl - 0.05;     %start of testing series
+tf = t_isl + 0.03;       %end of testing series
+
+% run the model from the repository
+
+sim('power_wind_dfig_1_3_11.slx')
+
+% get the parameters from 'To Workspace'
+
+time = sim.Time;
+
+df_dt = sim.Data(:,3);
+vphase = sim.Data(:,6);
+iphase = sim.Data(:,7);
+
+theta_afd = sim.Data(:,1);
+d_theta_afd = sim.Data(:,2);
+fpll = sim.Data(:,4);
+vpcc = sim.Data(:,5);
+dv_df = sim.Data(:,8);
+dvph_dP = sim.Data(:,9);
+
+\end{lstlisting}
+
+
+\begin{lstlisting}[style=Matlab-editor, caption={Data cleaning block}]
+Ind_to = find(abs(time - to)== min(abs(time - to)));
+Ind_tk1 = find(abs(time - tk1)== min(abs(time - tk1)));
+Ind_tk2 = find(abs(time - tk2)== min(abs(time - tk2)));
+Ind_tf = find(abs(time - tf)== min(abs(time - tf)));
+        
+t = time(Ind_to:Ind_tf);                %time
+x1 = theta_afd(Ind_to:Ind_tf);          %theta_afd+pll
+x2= d_theta_afd(Ind_to:Ind_tf);         %d_theta_afd+pll
+x3 = df_dt(Ind_to:Ind_tf);              %df_dt
+x4 = fpll(Ind_to:Ind_tf);               %freq_pll
+x5 = vpcc(Ind_to:Ind_tf);               %v_pcc
+x6 = vphase(Ind_to:Ind_tf);             %v_phase 
+x7 = iphase(Ind_to:Ind_tf);             %v_phase 
+x8 = dv_df(Ind_to:Ind_tf);              %v_phase 
+x9 = dvph_dP(Ind_to:Ind_tf);            %v_phase 
+        
+%% Plotting figures Cleaned Data
+        
+figure
+subplot(3,1,1)
+hold on
+plot (t, x3)
+plot (t, x6)
+xlabel('t (seconds)')
+ylabel('df/dt')
+grid on
+title('Islanding Data')
+legend('ROCOF, Volatage Phaseangle')
+        
+subplot(3,1,2)
+hold on
+plot (t, x5)
+xlabel('t (seconds)')
+ylabel('Volatage PCC')
+grid on
+title('Islanding Data')
+legend('Volatage PCC')
+        
+subplot(3,1,3)
+hold on
+plot (t, x4)
+xlabel('t (seconds)')
+ylabel('Frequency PLL')
+grid on
+title('Islanding Data')
+legend('Frequency PLL')
+
+\end{lstlisting}
+
+
+\begin{lstlisting}[style=Matlab-editor, caption={Autoencoder training block}]
+%Spliting traning and testing data
+normaltime = time(Ind_to:Ind_tk1);
+faultytime = time(Ind_tk2:Ind_tf);
+normaldata = df_dt(Ind_to:Ind_tk1);
+faultydata = df_dt(Ind_tk2:Ind_tf);
+faultydata(isnan(faultydata))= 0.5;
+        
+tiledlayout('flow')
+nexttile,plot(normaldata(1:size(normaldata))), title('Pre Islanding Conditions')
+nexttile,plot(faultydata(1:size(faultydata))), title('Post Islanding data')
+
+% Reorganize data into a matrix of frames
+w = 100; % Length of frame
+traindata_ae = generateSubseq(normaldata, w)';
+testdata_ae = generateSubseq(faultydata, w)';
+        
+%Setup Autoencoder options
+option.MaxEpochs = 500;
+option.hiddenSize = 30; 
+% number of hidden nodes, i.e. the dimension of the "code"
+option.L2WeightRegularization = 1.0e-10;
+option.SparsityRegularization = 1.0e-10;
+option.SparsityProportion = 0.7;
+option.ScaleData = true;
+option.UseGPU = true;
+        
+%Train the Autoencoder model
+autoenc = trainAutoencoder(traindata_ae, option.hiddenSize, ...
+'MaxEpochs', option.MaxEpochs, ...
+'L2WeightRegularization', option.L2WeightRegularization, ...
+'SparsityRegularization', option.SparsityRegularization, ...
+'SparsityProportion', option.SparsityProportion, ...
+'ScaleData', option.ScaleData, ...
+'UseGPU', option.UseGPU);
+        
+%Do the encode-decode
+code = encode(autoenc,testdata_ae(:,1));
+decoded = decode(autoenc,code);
+        
+% Calculate the error for the entire test set and visualize
+% Make a prediction with the entire test dataset
+y_hat = predict(autoenc, testdata_ae);
+        
+% Calculate the error
+E1 = sqrt(sum((y_hat - testdata_ae).^2));
+X1_hat = y_hat(1, :);
+        
+% Plotting Measured Vs Predicted
+ax1 = subplot(2, 1, 1);
+plot(1:length(faultydata), faultydata, 1:length(X1_hat), X1_hat, 'LineWidth',1.5), legend('Measured','Predicted')
+
+ax2 = subplot(2, 1, 2);
+plot(1:length(E1), E1, 'LineWidth',1.5), legend('Error')
+        % 
+% %linkaxes([ax1 ax2],'x')
+ 
+\end{lstlisting}
+
+
+\begin{lstlisting}[style=Matlab-editor, caption={Autoencoder run detection block}]
+% Preallocate
+losses = nan(100,1);
+dataall = [];
+j = 1
+% Setup axes and plots
+ax1 = subplot(2,1,1);
+p1 = plot(ax1,magic(2));
+title('Measured and Predicted')
+xlabel('t (seconds)')
+ylabel('df/dt')
+grid on
+legend('df/dt Measured', 'df/dt Predicted', 'Islanding detection')
+        
+ax2 = subplot(2,1,2);
+p2 = plot(ax2,1); 
+title('RMSE')
+xlabel('t (seconds)')
+ylabel('RMSE')
+grid on
+legend('Root mean square error')
+
+% Loop through data points
+for i = 1:(size(faultydata)-100)
+       
+% Take a frame of data
+data = faultydata(i:i+99);
+t = faultytime(i:i+99);
+        
+% Predict with autoencoder
+yhat = predict(autoenc,data);
+        
+% Calculate error
+losses = [losses;sqrt(sum((yhat - data).^2))];
+        
+% After first frame, only add one data point to the plot
+if j > 1
+yhat = yhat(end);
+data = data(end);
+t = t(end);
+end
+        
+% Update data to be plotted
+dataall = [dataall;[data yhat t]];
+        
+% Plot
+p1(1).XData = 1:size(dataall,1);p1(2).LineWidth = 1.5;
+p1(2).XData = 1:size(dataall,1);
+c = 1:size(dataall,1)
+d = dataall(:,1)
+f = dataall(:,2)
+        
+%p1(1).XData = dataall(:,3);p1(2).LineWidth = 1.5;
+%p1(2).XData = dataall(:,3);
+p1(1).YData = dataall(:,1);p2.LineWidth = 1.5;
+p1(2).YData = dataall(:,2);
+p2.XData = 1:length(losses);
+p2.YData = losses;
+pause(0.005)
+j = j+1;
+end
+xlim([0 length(losses)])
+
+\end{lstlisting}
+
+\begin{lstlisting}[style=Matlab-editor, caption={Anomaly plot for set threshold}]
+%The threshold for each case varies. Please uncomment the mode you want ot
+%to select as below:
+threshold = 100;   %for df_dt
+%   threshold = 3;      %for vpcc
+%   threshold = 4;      % for vphase
+%   threshold = 1;      %for theta_afd
+%   threshold = 8e4;        
+% for dv_dP (1.05e4 - 9.5e5)
+                
+anomalyIdxs = find(losses > threshold);
+det_time = faultytime(min(find(losses > threshold)))
+det_faultydata = faultydata(min(find(losses > threshold)));
+
+% Highlight the region with high anomaly scores
+patch(ax1,[min(anomalyIdxs),max(anomalyIdxs),max(anomalyIdxs),min(anomalyIdxs)],...
+[min(ax1.YLim),min(ax1.YLim),max(ax1.YLim),max(ax1.YLim)],'red','FaceAlpha',.3)
