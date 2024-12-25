@@ -1,6 +1,6 @@
 # Muhammad Adeel Arif
 
-**Graduate Research Assistant | Power Systems Enthusiast | Data-Driven Dynamics Researcher**
+**Graduate Research Assistant | Power Systems Analyst/Engineer | Data-Driven Dynamics Researcher**
 
 📍 Burlington, VT, USA  
 📧 [marif@uvm.com](mailto:marif@uvm.com) | [adeelarif.vt@gmail.com](mailto:adeelarif.vt@gmail.com)  
